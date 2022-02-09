@@ -1,0 +1,113 @@
+Предположим имеется Ада приложение использующее динамическую библиотеку с
+вызовами в Си соглашении. Для описания интерфейса к динамической библиотеке
+как правило в Ада пишут файл спецификацию тонкого биндинга с декларацией
+импортируемых функций и переменных. Имя импортируемой функции или переменной
+задается аспектом External_Name:
+
+   function SSL_CTX_new (Meth : SSL_Method) return SSL_CTX
+     with Import, Convention => C, External_Name => "SSL_CTX_new";
+
+   procedure SSL_CTX_free (P1 : SSL_CTX)
+     with Import, Convention => C, External_Name => "SSL_CTX_free";
+
+   procedure SSL_CTX_set_quiet_shutdown (Ctx : SSL_CTX; Mode : int)
+     with Import, Convention => C,
+          External_Name => "SSL_CTX_set_quiet_shutdown";
+
+Если External_Name не задан, как к примеру:
+
+   gnutls_srp_1024_group_prime     : constant gnutls_datum_t
+     with Import, Convention => C;
+
+   gnutls_srp_1024_group_generator : constant gnutls_datum_t
+     with Import, Convention => C;
+
+   function gnutls_alert_get_name
+     (alert : gnutls_alert_description_t) return  CS.chars_ptr
+     with Import, Convention => C;
+
+   function gnutls_cipher_get
+     (session : gnutls_session_t) return gnutls_cipher_algorithm_t
+     with Import, Convention => C;
+
+тогда имя соответсвует имени Ада функции или переменной в нижнем регистре.
+
+Если интерфейс к динамической библиотеке задан таким образом, то приложение не
+загрузится если при запуске приложения загрузчик не сможет найди динамическую
+библиотеку. А что если наше приложение не всегда использует функции
+динамической библиотеки, и не всем пользователям нужна та функциональность
+приложения которую обеспечивает эта динамическая библиотека.
+Для этого случая нужно несколько иначе писать файл спецификацию тонкого
+биндинга с декларацией импортируемых функций и переменных. А именно вместо
+External_Name необходимо использовать аспект Address:
+
+   function SSL_CTX_new (Meth : SSL_Method) return SSL_CTX
+     with Import, Convention => C, Address => Loader.Symbol ("SSL_CTX_new");
+
+   procedure SSL_CTX_free (P1 : SSL_CTX)
+     with Import, Convention => C, Address => Loader.Symbol ("SSL_CTX_free");
+
+   procedure SSL_CTX_set_quiet_shutdown (Ctx : SSL_CTX; Mode : int)
+     with Import, Convention => C,
+          Address => Loader.Symbol ("SSL_CTX_set_quiet_shutdown");
+
+Где Loader это пакет в котором происходит загрузка динамической библиотеки и
+получение адреса функции или переменной по имени через вызов Symbol.
+
+Если аскет External_Name не задан, все равно необходимо указывать аспект Address:
+
+   gnutls_srp_1024_group_prime     : constant gnutls_datum_t
+     with Import, Convention => C,
+          Address => Loader.Symbol ("gnutls_srp_1024_group_prime");
+
+   gnutls_srp_1024_group_generator : constant gnutls_datum_t
+     with Import, Convention => C,
+          Address => Loader.Symbol ("gnutls_srp_1024_group_generator");
+
+   function gnutls_alert_get_name
+     (alert : gnutls_alert_description_t) return  CS.chars_ptr
+     with Import, Convention => C,
+          Address => Loader.Symbol ("gnutls_alert_get_name");
+
+   function gnutls_cipher_get
+     (session : gnutls_session_t) return gnutls_cipher_algorithm_t
+     with Import, Convention => C,
+          Address => Loader.Symbol ("gnutls_cipher_get");
+
+Что должна вернуть функция Symbol если не найдена динамическая библиотека или
+не найдено указанное имя в этой динамической библиотеке. В случае если вызов
+используется в элаборации пакетов приложения необходимо не нарушить загрузку и
+проигнорировать вызов. Программист зная какие вызовы используются при
+элаборации пакетов возвратит из Loader.Symbol адрес функции которая ничего не
+делает и возвращает значение, которое не приведет к ошибке в элаборации. Здесь
+следует сказать что для Си соглашения о вызовах не обязательно повторять
+количество переданных в функцию параметров в подставляемой функции, поскольку в
+Си соглашении очисткой стека занимается вызывающая сторона. То есть, если
+вызывается Си функция и туда передается 3 параметра, а получает управление
+функция не принимающая ни одного параметра, то по завершении функции без
+параметров и возврате в вызывающую процедуру стек останется в первозданном
+состоянии, просто все 3 параметры будут проигнорированы. В случае если функция
+используется не во время элаборации а непосредственно при работе приложения,
+то необходимо как то сообщить пользователям что данная функциональность не
+поддерживается. Это можно сэмулировать обычным для данной Си библиотеки
+обработкой ошибок, либо генерацией Ada исключения из функций подставляемых
+вместо функций библиотеки.
+
+Итак, у нас есть динамическая библиотека с вызовами в Си соглашении и 2 способа
+ее использования, обязательный, когда приложение не загрузиться без данной
+библиотеки и опциональный, когда приложение загрузиться, и будет работать без
+функций поддерживаемых данной библиотекой. Оба способа использования
+динамической библиотеки имеют право на существование и для каждого из этих
+способов необходимо иметь почти одинаковые спецификации тонкого биндинга
+отличающиеся только аспектами External_Name и Address. Если файл спецификации
+достаточно большой то будет затруднительно поддерживать 2 почти одинаковых
+файла внося исправления и доработки. Напрашивается утилита которая возьмет файл
+спецификации с аспектами External_Name, распарсит его и сгенерирует файл
+спецификации с аспектами Address. Данная утилита была написана проекте
+"Ada Web Server" для обеспечения динамического опционального биндинга SSL
+библиотек OpenSSL и GNUTLS.
+
+config/ssl/dynamo/dynamo.adb
+
+Пока она используется только в рамках AWS проекта, но с небольшими доработками
+ее можно использовать и для любого другого биндинга к Си библиотекам.
